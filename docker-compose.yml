@@ -1,0 +1,184 @@
+services:
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: eventia_rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: eventia
+      RABBITMQ_DEFAULT_PASS: eventia_pass
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - eventia-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # MySQL Database for Auth Service
+  mysql-auth-db:
+    image: mysql:8.0
+    container_name: eventia_mysql_auth
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: eventia_auth_db
+      MYSQL_USER: eventia_auth_user
+      MYSQL_PASSWORD: eventia_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_auth_data:/var/lib/mysql
+    networks:
+      - eventia-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # MySQL Database for Loyalty Service
+  mysql-loyalty-db:
+    image: mysql:8.0
+    container_name: eventia_mysql_loyalty
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: eventia_loyalty_db
+      MYSQL_USER: eventia_loyalty_user
+      MYSQL_PASSWORD: eventia_pass
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_loyalty_data:/var/lib/mysql
+    networks:
+      - eventia-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Client/Auth Service
+  auth-service:
+    image: eventia/eventia-auth:latest
+    container_name: eventia_auth_service
+    restart: always
+    environment:
+      PORT: 3001
+      DB_HOST: mysql-auth-db
+      DB_PORT: 3306
+      DB_NAME: eventia_auth_db
+      DB_USER: eventia_auth_user
+      DB_PASSWORD: eventia_pass
+      JWT_SECRET: Ab12345678.
+      JWT_EXPIRES_IN: 6h
+      RABBITMQ_URL: amqp://eventia:eventia_pass@rabbitmq:5672
+    ports:
+      - "3001:3001"
+    depends_on:
+      mysql-auth-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventia-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3001/",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Loyalty Points Service
+  loyalty-service:
+    image: eventia/eventia-loyalty:latest
+    container_name: eventia_loyalty_service
+    restart: always
+    environment:
+      PORT: 3002
+      DB_HOST: mysql-loyalty-db
+      DB_PORT: 3306
+      DB_NAME: eventia_loyalty_db
+      DB_USER: eventia_loyalty_user
+      DB_PASSWORD: eventia_pass
+      RABBITMQ_URL: amqp://eventia:eventia_pass@rabbitmq:5672
+      NODE_ENV: production
+    ports:
+      - "3002:3002"
+    depends_on:
+      mysql-loyalty-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventia-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3002/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # API Gateway
+  api-gateway:
+    image: eventia/eventia-apigateway:latest
+    container_name: eventia_api_gateway
+    restart: always
+    environment:
+      PORT: 3000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      LOYALTY_SERVICE_URL: http://loyalty-service:3002
+      CORS_ORIGIN: "*"
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth-service
+      - loyalty-service
+    networks:
+      - eventia-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  eventia-network:
+    driver: bridge
+
+volumes:
+  mysql_auth_data:
+    driver: local
+  mysql_loyalty_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
