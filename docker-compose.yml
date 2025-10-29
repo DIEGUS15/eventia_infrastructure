@@ -62,6 +62,27 @@ services:
       timeout: 20s
       retries: 10
 
+  # MySQL Database for Shipping Service
+  mysql-shipping-db:
+    image: mysql:8.0
+    container_name: eventia_mysql_shipping
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: eventia_shipping_db
+      MYSQL_USER: eventia_shipping_user
+      MYSQL_PASSWORD: eventia_pass
+    ports:
+      - "3311:3306"
+    volumes:
+      - mysql_shipping_data:/var/lib/mysql
+    networks:
+      - eventia-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
   # Client/Auth Service
   auth-service:
     image: eventia/eventia-auth:latest
@@ -139,6 +160,81 @@ services:
       retries: 3
       start_period: 40s
 
+  # Email Notification Service
+  email-service:
+    image: eventia/eventia-email:latest
+    container_name: eventia_email_service
+    restart: always
+    environment:
+      PORT: 3003
+      RABBITMQ_URL: amqp://eventia:eventia_pass@rabbitmq:5672
+      NODE_ENV: production
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_SECURE: false
+      SMTP_USER: diegogranados1501@gmail.com
+      SMTP_PASS: yqqzrnzexanlmtjr
+      EMAIL_FROM: diegogranados1501@gmail.com
+    ports:
+      - "3003:3003"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventia-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3003/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Shipping/Delivery Service
+  shipping-service:
+    image: eventia/eventia-shipping:latest
+    container_name: eventia_shipping_service
+    restart: always
+    environment:
+      PORT: 3004
+      DB_HOST: mysql-shipping-db
+      DB_PORT: 3306
+      DB_NAME: eventia_shipping_db
+      DB_USER: eventia_shipping_user
+      DB_PASSWORD: eventia_pass
+      RABBITMQ_URL: amqp://eventia:eventia_pass@rabbitmq:5672
+      NODE_ENV: production
+    ports:
+      - "3004:3004"
+    depends_on:
+      mysql-shipping-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventia-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3004/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   # API Gateway
   api-gateway:
     image: eventia/eventia-apigateway:latest
@@ -148,6 +244,8 @@ services:
       PORT: 3000
       AUTH_SERVICE_URL: http://auth-service:3001
       LOYALTY_SERVICE_URL: http://loyalty-service:3002
+      EMAIL_SERVICE_URL: http://email-service:3003
+      SHIPPING_SERVICE_URL: http://shipping-service:3004
       CORS_ORIGIN: "*"
       NODE_ENV: production
     ports:
@@ -155,6 +253,8 @@ services:
     depends_on:
       - auth-service
       - loyalty-service
+      - email-service
+      - shipping-service
     networks:
       - eventia-network
     healthcheck:
@@ -179,6 +279,8 @@ volumes:
   mysql_auth_data:
     driver: local
   mysql_loyalty_data:
+    driver: local
+  mysql_shipping_data:
     driver: local
   rabbitmq_data:
     driver: local
